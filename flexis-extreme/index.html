@@ -47,15 +47,22 @@ const COL = {
   yellow: { base:'#f0c020', lite:'#fff080', dark:'#a07810' },
 };
 
-// Piece formations – pixel offsets [dx, dy] from the pivot block
+// Classic Tetris tetrominoes – pixel offsets [dx, dy] from pivot
 const FMTS = [
-  [[0,0],[BS,0]],
-  [[0,0],[0,BS]],
-  [[-BS,0],[0,0],[BS,0]],
-  [[0,-BS],[0,0],[0,BS]],
-  [[0,0],[BS,0],[0,BS]],
-  [[0,0],[-BS,0],[0,BS]],
-  [[0,0],[BS,0],[BS/2,BS]],
+  // I
+  [[-BS*1.5,0],[-BS*0.5,0],[BS*0.5,0],[BS*1.5,0]],
+  // O
+  [[-BS*0.5,-BS*0.5],[BS*0.5,-BS*0.5],[-BS*0.5,BS*0.5],[BS*0.5,BS*0.5]],
+  // T
+  [[-BS,0],[0,0],[BS,0],[0,BS]],
+  // S
+  [[0,0],[BS,0],[-BS,BS],[0,BS]],
+  // Z
+  [[-BS,0],[0,0],[0,BS],[BS,BS]],
+  // L
+  [[-BS,0],[0,0],[BS,0],[-BS,BS]],
+  // J
+  [[-BS,0],[0,0],[BS,0],[BS,BS]],
 ];
 
 // ── Utility ──────────────────────────────────────────────────────
@@ -202,6 +209,11 @@ class Piece {
 
   rotate() {
     this.offsets = this.offsets.map(b => ({ dx:-b.dy, dy:b.dx, color:b.color }));
+    // Wall-kick: push piece back inside play area after rotation
+    const minX = Math.min(...this.offsets.map(b => this.cx+b.dx)) - BR;
+    const maxX = Math.max(...this.offsets.map(b => this.cx+b.dx)) + BR;
+    if (minX < PX)      this.cx += PX - minX;
+    if (maxX > PX+PW)   this.cx -= maxX - (PX+PW);
   }
   moveLeft() {
     const minX = Math.min(...this.offsets.map(b => this.cx+b.dx)) - BR;

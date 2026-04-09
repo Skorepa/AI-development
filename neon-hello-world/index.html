@@ -20,13 +20,14 @@
       font-family: 'Orbitron', monospace;
     }
 
-    /* ── Canvas particles ── */
+    /* ── Canvases ── */
     canvas {
       position: fixed;
       inset: 0;
-      z-index: 0;
       pointer-events: none;
     }
+    #matrix { z-index: 0; }
+    #stars  { z-index: 1; }
 
     /* ── Grid overlay ── */
     .grid {
@@ -183,6 +184,7 @@
   </style>
 </head>
 <body>
+  <canvas id="matrix"></canvas>
   <canvas id="stars"></canvas>
   <div class="grid"></div>
 
@@ -197,6 +199,52 @@
     <p class="subtitle">Welcome to the neon dimension</p>
     <div class="card">[ System online — all systems nominal ]</div>
   </div>
+
+  <script>
+    // ── Matrix rain ─────────────────────────────────────────────
+    const mCanvas = document.getElementById('matrix');
+    const mCtx    = mCanvas.getContext('2d');
+
+    const CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&';
+    const FONT_SIZE = 16;
+    let mW, mH, cols, drops;
+
+    function mResize() {
+      mW = mCanvas.width  = window.innerWidth;
+      mH = mCanvas.height = window.innerHeight;
+      cols  = Math.floor(mW / FONT_SIZE);
+      drops = Array(cols).fill(1);
+    }
+
+    function drawMatrix() {
+      // semi-transparent fade creates the trail
+      mCtx.fillStyle = 'rgba(5, 5, 16, 0.055)';
+      mCtx.fillRect(0, 0, mW, mH);
+
+      mCtx.font = FONT_SIZE + 'px monospace';
+
+      for (let i = 0; i < cols; i++) {
+        const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+        const y = drops[i] * FONT_SIZE;
+
+        // head char is bright white-cyan, trail is green-cyan
+        const isHead = drops[i] * FONT_SIZE < mH && Math.random() > 0.975;
+        mCtx.shadowBlur  = isHead ? 12 : 4;
+        mCtx.shadowColor = isHead ? '#fff' : '#0f8';
+        mCtx.fillStyle   = isHead ? '#cff' : `rgba(0,${180 + Math.floor(Math.random()*75)},${100 + Math.floor(Math.random()*80)},${Math.random()*.5+.5})`;
+
+        mCtx.fillText(char, i * FONT_SIZE, y);
+
+        // reset column randomly after it reaches bottom
+        if (y > mH && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+
+    window.addEventListener('resize', mResize);
+    mResize();
+    setInterval(drawMatrix, 45);
+  </script>
 
   <script>
     // ── Particle stars ──────────────────────────────────────────

@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Flexis Extreme</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #040a18;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+    }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ── Constants ────────────────────────────────────────────────────
+const BS  = 40;              // block size px
+const COLS = 7;
+const PW  = BS * COLS;       // 280  play width
+const PH  = 420;             // play height
+const CW  = 360;             // canvas width
+const CH  = 610;             // canvas height
+const PX  = (CW - PW) / 2;  // 40   play left
+const PY  = 62;              // play top
+const BR  = BS * 0.46;       // block collision radius
+
+const GRAV      = 0.38;
+const BOUNCE_N  = 0.52;   // normal bounce restitution
+const BOUNCE_T  = 0.45;   // tangential friction on bounce
+const SETTLE_V  = 1.2;    // velocity below which block settles
+const ADJ_DIST  = BS * 1.48; // adjacency threshold for colour matching
+const BLINK_DUR = 85;     // frames the matched group blinks before clearing
+const CLEAR_DUR = 20;     // frames for fade-out animation
+
+const COLORS = ['orange', 'blue', 'green', 'yellow'];
+const COL = {
+  orange: { base:'#f06020', lite:'#ffaa70', dark:'#903010' },
+  blue:   { base:'#4a90e8', lite:'#a0d0ff', dark:'#1a4a9a' },
+  green:  { base:'#30c040', lite:'#90ee90', dark:'#107020' },
+  yellow: { base:'#f0c020', lite:'#fff080', dark:'#a07810' },
+};
+
+// Piece formations – pixel offsets [dx, dy] from the pivot block
+const FMTS = [
+  [[0,0],[BS,0]],
+  [[0,0],[0,BS]],
+  [[-BS,0],[0,0],[BS,0]],
+  [[0,-BS],[0,0],[0,BS]],
+  [[0,0],[BS,0],[0,BS]],
+  [[0,0],[-BS,0],[0,BS]],
+  [[0,0],[BS,0],[BS/2,BS]],
+];
+
+// ── Utility ──────────────────────────────────────────────────────
+function rndRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,   x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h, x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,   x,y+h-r);
+  ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,     x+r,y);
+  ctx.closePath();
+}
+const rand  = (a,b) => a + Math.random()*(b-a);
+const rndCo = ()    => COLORS[Math.floor(Math.random()*COLORS.length)];
+
+// ── Block ────────────────────────────────────────────────────────
+class Block {
+  constructor(x, y, color) {
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+    this.color = color;
+    this.angle = 0; this.va = 0;
+    this.settled  = false;
+    this.blinking = false; this.blinkTimer = 0;
+    this.clearing = false; this.clearTimer = 0;
+    this.alpha    = 1;
+  }
+
+  physics(all) {
+    if (this.settled || this.blinking || this.clearing) return;
+
+    this.vy += GRAV;
+    this.x  += this.vx;
+    this.y  += this.vy;
+    this.angle += this.va;
+    this.va *= 0.96;
+
+    // Walls
+    if (this.x - BR < PX) {
+      this.x  = PX + BR;
+      this.vx = Math.abs(this.vx) * BOUNCE_T;
+      this.va = -this.va * 0.5;
+    } else if (this.x + BR > PX + PW) {
+      this.x  = PX + PW - BR;
+      this.vx = -Math.abs(this.vx) * BOUNCE_T;
+      this.va = -this.va * 0.5;
+    }
+
+    // Floor
+    if (this.y + BR >= PY + PH) {
+      this.y = PY + PH - BR;
+      if (Math.abs(this.vy) < SETTLE_V) {
+        this.vy = 0; this.vx = 0; this.va = 0; this.settled = true;
+      } else {
+        this.vy = -Math.abs(this.vy) * BOUNCE_N;
+        this.vx *= BOUNCE_T;
+        this.va *= 0.6;
+      }
+      return;
+    }
+
+    // Block–block collisions
+    for (const o of all) {
+      if (o === this || o.clearing) continue;
+      const dx = this.x - o.x, dy = this.y - o.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const minD = BR * 2;
+      if (dist < minD && dist > 0.001) {
+        const nx = dx/dist, ny = dy/dist;
+        const ov = minD - dist;
+        if (o.settled || o.blinking) {
+          this.x += nx * ov; this.y += ny * ov;
+          const dot = this.vx*nx + this.vy*ny;
+          if (dot < 0) {
+            this.vx -= (1+BOUNCE_N)*dot*nx;
+            this.vy -= (1+BOUNCE_N)*dot*ny;
+            this.vx *= BOUNCE_T;
+            this.va += rand(-0.08, 0.08);
+          }
+          if (ny < -0.55 && Math.abs(this.vy) < SETTLE_V && Math.abs(this.vx) < SETTLE_V) {
+            this.vy = 0; this.vx = 0; this.va = 0; this.settled = true;
+          }
+        } else {
+          this.x += nx*ov*0.5; this.y += ny*ov*0.5;
+          o.x    -= nx*ov*0.5; o.y    -= ny*ov*0.5;
+          const rv = (this.vx-o.vx)*nx + (this.vy-o.vy)*ny;
+          if (rv < 0) {
+            const imp = rv * BOUNCE_N;
+            this.vx -= imp*nx; this.vy -= imp*ny;
+            o.vx    += imp*nx; o.vy    += imp*ny;
+          }
+        }
+      }
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+
+    const s = BS * 0.46, r = BS * 0.20;
+    const c = COL[this.color];
+    const flash = this.blinking && Math.floor(this.blinkTimer/5)%2 === 0;
+
+    ctx.shadowBlur = 12; ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.fillStyle  = flash ? '#ffffff' : c.base;
+    rndRect(ctx, -s,-s, s*2,s*2, r); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (!flash) {
+      // Gloss gradient
+      const g = ctx.createLinearGradient(-s,-s, s*0.4,s*0.4);
+      g.addColorStop(0,   c.lite + 'cc');
+      g.addColorStop(0.45,'rgba(255,255,255,0)');
+      g.addColorStop(1,   c.dark + '88');
+      ctx.fillStyle = g;
+      rndRect(ctx, -s,-s, s*2,s*2, r); ctx.fill();
+      // Top highlight pill
+      ctx.fillStyle = 'rgba(255,255,255,0.38)';
+      rndRect(ctx, -s*0.65,-s*0.82, s*1.3,s*0.65, r*0.5); ctx.fill();
+    }
+
+    ctx.strokeStyle = flash ? '#aff' : c.dark;
+    ctx.lineWidth   = 1.5;
+    rndRect(ctx, -s,-s, s*2,s*2, r); ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+// ── Piece ────────────────────────────────────────────────────────
+class Piece {
+  constructor() {
+    const fmt = FMTS[Math.floor(Math.random()*FMTS.length)];
+    this.offsets = fmt.map(([dx,dy]) => ({ dx, dy, color: rndCo() }));
+    this.cx = PX + PW/2;
+    this.cy = PY - BS;
+  }
+
+  rotate() {
+    this.offsets = this.offsets.map(b => ({ dx:-b.dy, dy:b.dx, color:b.color }));
+  }
+  moveLeft() {
+    const minX = Math.min(...this.offsets.map(b => this.cx+b.dx)) - BR;
+    if (minX - BS*0.5 >= PX) this.cx -= BS;
+  }
+  moveRight() {
+    const maxX = Math.max(...this.offsets.map(b => this.cx+b.dx)) + BR;
+    if (maxX + BS*0.5 <= PX+PW) this.cx += BS;
+  }
+
+  wouldHit(settled) {
+    for (const o of this.offsets) {
+      const bx = this.cx+o.dx, by = this.cy+o.dy;
+      if (by + BR >= PY+PH) return true;
+      for (const s of settled) {
+        const dx = bx-s.x, dy = by-s.y;
+        if (Math.sqrt(dx*dx+dy*dy) < BR*2) return true;
+      }
+    }
+    return false;
+  }
+
+  draw(ctx) {
+    for (const o of this.offsets) {
+      const b = new Block(this.cx+o.dx, this.cy+o.dy, o.color);
+      b.draw(ctx);
+    }
+  }
+}
+
+// ── Particle ─────────────────────────────────────────────────────
+class Particle {
+  constructor(x, y, type, opts = {}) {
+    this.x = x; this.y = y; this.type = type;
+    if (type === 'score') {
+      this.text = opts.text;
+      this.vx = 0; this.vy = -1.3;
+      this.life = this.maxLife = 72;
+    } else {
+      const spd = rand(1.8,4.2), ang = rand(0,Math.PI*2);
+      this.vx = Math.cos(ang)*spd; this.vy = Math.sin(ang)*spd;
+      this.color = opts.color || '#fff';
+      this.life = this.maxLife = rand(24,42);
+    }
+  }
+  update() { this.x+=this.vx; this.y+=this.vy; this.vy+=0.09; this.life--; }
+  draw(ctx) {
+    const t = this.life/this.maxLife;
+    ctx.save(); ctx.globalAlpha = t;
+    if (this.type === 'score') {
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 14; ctx.shadowColor = '#00eeff';
+      ctx.font = `bold ${this.text.startsWith('C') ? 17 : 15}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(this.text, this.x, this.y);
+    } else {
+      ctx.fillStyle = this.color;
+      ctx.shadowBlur = 8; ctx.shadowColor = this.color;
+      const sz = 2.8*t;
+      ctx.beginPath();
+      ctx.moveTo(this.x,        this.y - sz*2.5);
+      ctx.lineTo(this.x + sz*0.7, this.y - sz*0.7);
+      ctx.lineTo(this.x + sz*2.5, this.y);
+      ctx.lineTo(this.x + sz*0.7, this.y + sz*0.7);
+      ctx.lineTo(this.x,        this.y + sz*2.5);
+      ctx.lineTo(this.x - sz*0.7, this.y + sz*0.7);
+      ctx.lineTo(this.x - sz*2.5, this.y);
+      ctx.lineTo(this.x - sz*0.7, this.y - sz*0.7);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// ── Game ─────────────────────────────────────────────────────────
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('game');
+    this.canvas.width  = CW;
+    this.canvas.height = CH;
+    this.ctx = this.canvas.getContext('2d');
+    this.keys = {};
+    this._bindInput();
+    this.restart();
+  }
+
+  restart() {
+    this.blocks    = [];
+    this.particles = [];
+    this.piece     = null;
+    this.nextPiece = new Piece();
+    this.score     = 0;
+    this.level     = 1;
+    this.gameOver  = false;
+    this.phase     = 'spawn';   // spawn | controlling | physics
+    this.fallSpeed = 1.8;
+    this.cascade   = 0;
+    this.colorTargets = {};
+    COLORS.forEach(c => { this.colorTargets[c] = Math.floor(rand(4,9)); });
+  }
+
+  _bindInput() {
+    document.addEventListener('keydown', e => {
+      if (this.keys[e.key]) return;
+      this.keys[e.key] = true;
+      if (this.gameOver) { if (e.key==='r'||e.key==='R') this.restart(); return; }
+      if (this.phase !== 'controlling') return;
+      if (e.key==='ArrowLeft')                          this.piece.moveLeft();
+      if (e.key==='ArrowRight')                         this.piece.moveRight();
+      if (e.key==='ArrowUp'||e.key==='z'||e.key==='Z') this.piece.rotate();
+      if (e.key===' ')                                  this._hardDrop();
+    });
+    document.addEventListener('keyup', e => { delete this.keys[e.key]; });
+  }
+
+  _settled()  { return this.blocks.filter(b => b.settled || b.blinking); }
+
+  _hardDrop() {
+    while (!this.piece.wouldHit(this._settled())) this.piece.cy += 2;
+    this._release();
+  }
+
+  _release() {
+    for (const o of this.piece.offsets) {
+      const b = new Block(this.piece.cx+o.dx, this.piece.cy+o.dy, o.color);
+      b.vy = rand(3.5, 5.5);
+      b.vx = rand(-1.8, 1.8);
+      b.va = rand(-0.13, 0.13);
+      this.blocks.push(b);
+    }
+    this.piece = null;
+    this.phase = 'physics';
+  }
+
+  _sparkles(x, y, color) {
+    const cols = ['#fff','#ff0','#0ff','#f0f', COL[color]?.lite||'#fff'];
+    for (let i=0; i<8; i++)
+      this.particles.push(new Particle(x, y, 'sparkle', { color: cols[i%cols.length] }));
+  }
+
+  _findMatches() {
+    const cands = this.blocks.filter(b => b.settled && !b.blinking && !b.clearing);
+    if (!cands.length) return false;
+    const visited = new Set();
+    let found = false;
+
+    for (const b of cands) {
+      if (visited.has(b)) continue;
+      const group = [], q = [b];
+      visited.add(b);
+      while (q.length) {
+        const cur = q.shift();
+        group.push(cur);
+        for (const o of cands) {
+          if (visited.has(o) || o.color !== cur.color) continue;
+          const dx=cur.x-o.x, dy=cur.y-o.y;
+          if (Math.sqrt(dx*dx+dy*dy) < ADJ_DIST) { visited.add(o); q.push(o); }
+        }
+      }
+      if (group.length >= 3) {
+        found = true;
+        group.forEach(bl => {
+          bl.blinking   = true;
+          bl.blinkTimer = BLINK_DUR;
+          bl.settled    = false;
+        });
+        const mult = Math.max(1, this.cascade);
+        const pts  = group.length * 10 * mult;
+        this.score += pts;
+        this.colorTargets[group[0].color] =
+          Math.max(0, (this.colorTargets[group[0].color]||0) - group.length);
+        const cx = group.reduce((s,bl)=>s+bl.x,0)/group.length;
+        const cy = group.reduce((s,bl)=>s+bl.y,0)/group.length;
+        const label = this.cascade > 0 ? `CASCADE! +${pts}` : `+${pts}`;
+        this.particles.push(new Particle(cx, cy-18, 'score', { text: label }));
+        if (this.cascade > 0) this._sparkles(cx, cy, group[0].color);
+      }
+    }
+    return found;
+  }
+
+  // ── Update ──────────────────────────────────────────────────────
+  update() {
+    if (this.gameOver) return;
+
+    this.particles = this.particles.filter(p => { p.update(); return p.life > 0; });
+
+    if (this.phase === 'spawn') {
+      this.piece     = this.nextPiece;
+      this.piece.cx  = PX + PW/2;
+      this.piece.cy  = PY - BS;
+      this.nextPiece = new Piece();
+      this.phase     = 'controlling';
+      if (this.piece.wouldHit(this._settled())) { this.gameOver = true; return; }
+
+    } else if (this.phase === 'controlling') {
+      const spd = this.keys['ArrowDown'] ? 7 : this.fallSpeed;
+      this.piece.cy += spd;
+      if (this.piece.wouldHit(this._settled())) {
+        this.piece.cy -= spd;
+        this._release();
+      }
+
+    } else if (this.phase === 'physics') {
+      const all = this.blocks.filter(b => !b.clearing);
+
+      // Physics step
+      for (const b of this.blocks)
+        if (!b.settled && !b.blinking && !b.clearing) b.physics(all);
+
+      // Blink countdown
+      for (const b of this.blocks) {
+        if (!b.blinking) continue;
+        if (--b.blinkTimer <= 0) {
+          b.blinking = false; b.clearing = true; b.clearTimer = CLEAR_DUR;
+          this._sparkles(b.x, b.y, b.color);
+        }
+      }
+
+      // Clear fade
+      for (const b of this.blocks) {
+        if (!b.clearing) continue;
+        b.alpha = --b.clearTimer / CLEAR_DUR;
+      }
+      this.blocks = this.blocks.filter(b => !(b.clearing && b.clearTimer <= 0));
+
+      // Check if all at rest
+      const active   = this.blocks.filter(b => !b.settled && !b.blinking && !b.clearing);
+      const blinking = this.blocks.filter(b => b.blinking);
+      const clearing = this.blocks.filter(b => b.clearing);
+
+      if (!active.length && !blinking.length && !clearing.length) {
+        if (this._findMatches()) {
+          this.cascade++;
+        } else {
+          this.cascade = 0;
+          this.phase   = 'spawn';
+        }
+      }
+    }
+  }
+
+  // ── Draw ────────────────────────────────────────────────────────
+  _drawBg() {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#070d20';
+    ctx.fillRect(0,0,CW,CH);
+
+    // Side panel strips
+    ctx.fillStyle = '#0b1530';
+    ctx.fillRect(0,0,PX,CH);
+    ctx.fillRect(PX+PW,0,PX,CH);
+
+    // Play area
+    ctx.fillStyle = '#050c1c';
+    ctx.fillRect(PX,PY,PW,PH);
+
+    // Grid
+    ctx.strokeStyle = 'rgba(50,110,200,0.07)';
+    ctx.lineWidth = 1;
+    for (let x=PX; x<=PX+PW; x+=BS) {
+      ctx.beginPath(); ctx.moveTo(x,PY); ctx.lineTo(x,PY+PH); ctx.stroke();
+    }
+    for (let y=PY; y<=PY+PH; y+=BS) {
+      ctx.beginPath(); ctx.moveTo(PX,y); ctx.lineTo(PX+PW,y); ctx.stroke();
+    }
+
+    // Play area border
+    ctx.strokeStyle = '#1e4a7a'; ctx.lineWidth = 2;
+    ctx.strokeRect(PX,PY,PW,PH);
+
+    // Decorative side slots
+    for (let i=0; i<6; i++) {
+      const sy = PY + 20 + i*62;
+      for (const sx of [5, PX+PW+13]) {
+        ctx.fillStyle   = '#0c1e3c';
+        rndRect(ctx, sx, sy, 22, 42, 6); ctx.fill();
+        ctx.strokeStyle = '#1a3a60'; ctx.lineWidth=1;
+        rndRect(ctx, sx, sy, 22, 42, 6); ctx.stroke();
+        // LED dot
+        ctx.fillStyle = i % 2 === 0 ? '#1a6a40' : '#1a3a6a';
+        ctx.beginPath(); ctx.arc(sx+11, sy+6, 3, 0, Math.PI*2); ctx.fill();
+      }
+    }
+  }
+
+  _drawHUD() {
+    const ctx = this.ctx;
+    // Top bar background
+    ctx.fillStyle = '#08122a';
+    ctx.fillRect(0,0,CW,PY-2);
+
+    // Score box
+    ctx.fillStyle = '#0c1c3c';
+    rndRect(ctx, CW/2-52,8, 104,38, 7); ctx.fill();
+    ctx.strokeStyle = '#2a6aaa'; ctx.lineWidth = 1.5;
+    rndRect(ctx, CW/2-52,8, 104,38, 7); ctx.stroke();
+    ctx.fillStyle = '#88ddff';
+    ctx.font = 'bold 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(this.score).padStart(5,'0'), CW/2, 34);
+
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';  ctx.fillStyle = '#88ffaa'; ctx.fillText(`LEVEL ${this.level}`, PX+2, 26);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#88ffaa'; ctx.fillText('MODE E', PX+PW-2, 26);
+
+    // Bottom HUD background
+    const by = PY+PH;
+    ctx.fillStyle = '#08122a';
+    ctx.fillRect(0, by, CW, CH-by);
+
+    // Separator line
+    ctx.strokeStyle = '#1e4a7a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0,by); ctx.lineTo(CW,by); ctx.stroke();
+
+    // Colour target counters
+    const spacing = PW/4;
+    COLORS.forEach((c,i) => {
+      const x = PX + spacing*i + spacing/2;
+      const y = by + 34;
+      ctx.shadowBlur = 6; ctx.shadowColor = COL[c].base;
+      ctx.fillStyle  = COL[c].base;
+      ctx.fillRect(x-30, y-13, 14, 14);
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = COL[c].dark; ctx.lineWidth = 1;
+      ctx.strokeRect(x-30, y-13, 14, 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
+      ctx.fillText(this.colorTargets[c], x-12, y);
+    });
+
+    // Next piece preview box
+    const npx = CW/2-36, npy = by+12;
+    ctx.fillStyle = '#0d1e40';
+    rndRect(ctx, npx, npy, 72, 58, 8); ctx.fill();
+    ctx.strokeStyle = '#3a7aaa'; ctx.lineWidth = 2;
+    rndRect(ctx, npx, npy, 72, 58, 8); ctx.stroke();
+
+    if (this.nextPiece) {
+      ctx.save();
+      ctx.translate(CW/2, npy+29);
+      ctx.scale(0.48, 0.48);
+      for (const o of this.nextPiece.offsets) new Block(o.dx, o.dy, o.color).draw(ctx);
+      ctx.restore();
+    }
+
+    // Controls strip
+    ctx.fillStyle = '#2a4a7a';
+    ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('← → MOVE   ↑/Z ROTATE   ↓ FAST   SPACE DROP   R RESTART', CW/2, CH-8);
+  }
+
+  draw() {
+    this._drawBg();
+    for (const b of this.blocks)    b.draw(this.ctx);
+    if (this.piece)                 this.piece.draw(this.ctx);
+    for (const p of this.particles) p.draw(this.ctx);
+    this._drawHUD();
+
+    if (this.gameOver) {
+      this.ctx.fillStyle = 'rgba(0,0,0,0.78)';
+      this.ctx.fillRect(0,0,CW,CH);
+      this.ctx.shadowBlur = 24; this.ctx.shadowColor = '#ff2020';
+      this.ctx.fillStyle = '#ff4444';
+      this.ctx.font = 'bold 30px monospace'; this.ctx.textAlign = 'center';
+      this.ctx.fillText('GAME OVER', CW/2, CH/2-20);
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#88ccff'; this.ctx.font = '15px monospace';
+      this.ctx.fillText(`Score: ${this.score}`, CW/2, CH/2+18);
+      this.ctx.fillStyle = '#5588bb';
+      this.ctx.fillText('Press R to restart', CW/2, CH/2+48);
+    }
+  }
+
+  loop() {
+    this.update();
+    this.draw();
+    requestAnimationFrame(() => this.loop());
+  }
+}
+
+new Game().loop();
+</script>
+</body>
+</html>

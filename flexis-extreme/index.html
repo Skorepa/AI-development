@@ -5,283 +5,332 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Flexis Extreme</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { margin:0; padding:0; box-sizing:border-box; }
     body {
-      background: #040a18;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      font-family: 'Courier New', monospace;
+      background:#040a18;
+      display:flex; align-items:center; justify-content:center;
+      min-height:100vh;
+      font-family:'Courier New', monospace;
     }
-    canvas { display: block; }
+    canvas { display:block; touch-action:none; }
   </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <script>
-// ── Constants ────────────────────────────────────────────────────
-const BS  = 40;              // block size px
+// ── Layout ───────────────────────────────────────────────────────
+const BS   = 46;
 const COLS = 7;
-const PW  = BS * COLS;       // 280  play width
-const PH  = 420;             // play height
-const CW  = 360;             // canvas width
-const CH  = 610;             // canvas height
-const PX  = (CW - PW) / 2;  // 40   play left
-const PY  = 62;              // play top
-const BR  = BS * 0.46;       // block collision radius
+const PW   = BS * COLS;          // 322
+const PH   = BS * 12;            // 552
+const CW   = 390;
+const CH   = 844;
+const PX   = (CW - PW) / 2;     // 34
+const PY   = 72;
+const BR   = BS * 0.46;          // ~21.2  collision radius
 
-const GRAV      = 0.38;
-const BOUNCE_N  = 0.52;   // normal bounce restitution
-const BOUNCE_T  = 0.45;   // tangential friction on bounce
-const SETTLE_V  = 1.2;    // velocity below which block settles
-const ADJ_DIST  = BS * 1.48; // adjacency threshold for colour matching
-const BLINK_DUR = 85;     // frames the matched group blinks before clearing
-const CLEAR_DUR = 20;     // frames for fade-out animation
+// ── Physics ──────────────────────────────────────────────────────
+const GRAV      = 0.36;
+const BOUNCE_N  = 0.70;   // normal restitution (bouncier)
+const BOUNCE_T  = 0.60;   // tangential friction
+const SETTLE_V  = 1.5;    // settle threshold
+const BLINK_DUR = 80;
+const CLEAR_DUR = 22;
+const ADJ_DIST  = BR * 2.25; // adjacency match threshold
 
-const COLORS = ['orange', 'blue', 'green', 'yellow'];
+// ── Colours ──────────────────────────────────────────────────────
+// 12 colours, unlocked 1 extra every 10 levels (starts at 4)
+const ALL_COLORS = [
+  'orange','blue','green','yellow',
+  'red','purple','cyan','pink',
+  'lime','gold','teal','indigo'
+];
 const COL = {
-  orange: { base:'#f06020', lite:'#ffaa70', dark:'#903010' },
-  blue:   { base:'#4a90e8', lite:'#a0d0ff', dark:'#1a4a9a' },
-  green:  { base:'#30c040', lite:'#90ee90', dark:'#107020' },
-  yellow: { base:'#f0c020', lite:'#fff080', dark:'#a07810' },
+  orange:{ base:'#f06020', lite:'#ffaa70', dark:'#903010' },
+  blue:  { base:'#4a90e8', lite:'#a0d0ff', dark:'#1a4a9a' },
+  green: { base:'#30c040', lite:'#90ee90', dark:'#107020' },
+  yellow:{ base:'#f0c020', lite:'#fff080', dark:'#a07810' },
+  red:   { base:'#e02828', lite:'#ff8888', dark:'#901010' },
+  purple:{ base:'#8030d0', lite:'#c090ff', dark:'#501090' },
+  cyan:  { base:'#20b0d0', lite:'#80e8ff', dark:'#107090' },
+  pink:  { base:'#e03090', lite:'#ff90cc', dark:'#901060' },
+  lime:  { base:'#70c010', lite:'#c0f060', dark:'#408000' },
+  gold:  { base:'#c08020', lite:'#ffd080', dark:'#806010' },
+  teal:  { base:'#10a080', lite:'#60e0c0', dark:'#076050' },
+  indigo:{ base:'#4848c8', lite:'#a0a0ff', dark:'#202080' },
 };
 
-// Classic Tetris tetrominoes – pixel offsets [dx, dy] from pivot
+// ── Tetrominoes (all 7 classic shapes) ───────────────────────────
 const FMTS = [
-  // I
-  [[-BS*1.5,0],[-BS*0.5,0],[BS*0.5,0],[BS*1.5,0]],
-  // O
-  [[-BS*0.5,-BS*0.5],[BS*0.5,-BS*0.5],[-BS*0.5,BS*0.5],[BS*0.5,BS*0.5]],
-  // T
-  [[-BS,0],[0,0],[BS,0],[0,BS]],
-  // S
-  [[0,0],[BS,0],[-BS,BS],[0,BS]],
-  // Z
-  [[-BS,0],[0,0],[0,BS],[BS,BS]],
-  // L
-  [[-BS,0],[0,0],[BS,0],[-BS,BS]],
-  // J
-  [[-BS,0],[0,0],[BS,0],[BS,BS]],
+  [[-BS*1.5,0],[-BS*.5,0],[BS*.5,0],[BS*1.5,0]],        // I
+  [[-BS*.5,-BS*.5],[BS*.5,-BS*.5],[-BS*.5,BS*.5],[BS*.5,BS*.5]], // O
+  [[-BS,0],[0,0],[BS,0],[0,BS]],                          // T
+  [[0,0],[BS,0],[-BS,BS],[0,BS]],                         // S
+  [[-BS,0],[0,0],[0,BS],[BS,BS]],                         // Z
+  [[-BS,0],[0,0],[BS,0],[-BS,BS]],                        // L
+  [[-BS,0],[0,0],[BS,0],[BS,BS]],                         // J
 ];
 
-// ── Utility ──────────────────────────────────────────────────────
-function rndRect(ctx, x, y, w, h, r) {
+// ── Helpers ──────────────────────────────────────────────────────
+function rndRect(ctx,x,y,w,h,r){
   ctx.beginPath();
   ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
-  ctx.quadraticCurveTo(x+w,y,   x+w,y+r);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r);
   ctx.lineTo(x+w,y+h-r);
-  ctx.quadraticCurveTo(x+w,y+h, x+w-r,y+h);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
   ctx.lineTo(x+r,y+h);
-  ctx.quadraticCurveTo(x,y+h,   x,y+h-r);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);
   ctx.lineTo(x,y+r);
-  ctx.quadraticCurveTo(x,y,     x+r,y);
+  ctx.quadraticCurveTo(x,y,x+r,y);
   ctx.closePath();
 }
-const rand  = (a,b) => a + Math.random()*(b-a);
-const rndCo = ()    => COLORS[Math.floor(Math.random()*COLORS.length)];
+const rand = (a,b) => a + Math.random()*(b-a);
+
+function getActiveColors(level){
+  const n = Math.min(4 + Math.floor((level-1)/10), ALL_COLORS.length);
+  return ALL_COLORS.slice(0, n);
+}
+
+function makeLevelTargets(level, activeColors){
+  const t = {};
+  activeColors.forEach(c => { t[c] = 0; });
+
+  if(level === 1){
+    // Tutorial – 1 of each colour, simple introduction
+    activeColors.forEach(c => { t[c] = 1; });
+    return t;
+  }
+
+  // Decide how many colours are required this level
+  const maxC = activeColors.length;
+  // Ramp from 2 required colours up to all over the first few levels
+  const ramp = Math.min(1, (level - 1) / (maxC * 2));
+  let numReq = Math.round(2 + ramp * (maxC - 2) + rand(-0.9, 0.9));
+  numReq = Math.max(2, Math.min(numReq, maxC));
+
+  // Some fun fixed challenge patterns every 5 levels
+  if(level % 5 === 0){
+    // "Monochrome sprint" – only 1 colour, lots of it
+    const c = activeColors[Math.floor(Math.random()*activeColors.length)];
+    t[c] = 6 + level;
+    return t;
+  }
+
+  // Total blocks scales with level; add a bit of randomness to keep it fresh
+  const base  = 4 + level * 2;
+  const total = base + Math.floor(rand(0, level + 2));
+
+  // Pick a random subset of colours
+  const pool = [...activeColors].sort(() => Math.random()-0.5).slice(0, numReq);
+
+  // Distribute total across the pool
+  let remaining = total;
+  pool.forEach((c, i) => {
+    if(i === pool.length - 1){
+      t[c] = Math.max(1, remaining);
+    } else {
+      const avg   = remaining / (pool.length - i);
+      const share = Math.max(1, Math.round(avg * rand(0.5, 1.5)));
+      t[c] = share;
+      remaining -= share;
+    }
+  });
+  return t;
+}
 
 // ── Block ────────────────────────────────────────────────────────
 class Block {
-  constructor(x, y, color) {
-    this.x = x; this.y = y;
-    this.vx = 0; this.vy = 0;
-    this.color = color;
-    this.angle = 0; this.va = 0;
-    this.settled  = false;
-    this.blinking = false; this.blinkTimer = 0;
-    this.clearing = false; this.clearTimer = 0;
-    this.alpha    = 1;
+  constructor(x, y, color){
+    this.x=x; this.y=y; this.vx=0; this.vy=0;
+    this.color=color;
+    this.angle=0; this.va=0;
+    this.settled=false;
+    this.blinking=false; this.blinkTimer=0;
+    this.clearing=false; this.clearTimer=0;
+    this.alpha=1;
   }
 
-  physics(all) {
-    if (this.settled || this.blinking || this.clearing) return;
+  physics(all){
+    if(this.settled || this.blinking || this.clearing) return;
 
     this.vy += GRAV;
     this.x  += this.vx;
     this.y  += this.vy;
     this.angle += this.va;
-    this.va *= 0.96;
+    this.va    *= 0.97;
 
     // Walls
-    if (this.x - BR < PX) {
-      this.x  = PX + BR;
+    if(this.x - BR < PX){
+      this.x = PX + BR;
       this.vx = Math.abs(this.vx) * BOUNCE_T;
       this.va = -this.va * 0.5;
-    } else if (this.x + BR > PX + PW) {
-      this.x  = PX + PW - BR;
+    } else if(this.x + BR > PX + PW){
+      this.x = PX + PW - BR;
       this.vx = -Math.abs(this.vx) * BOUNCE_T;
       this.va = -this.va * 0.5;
     }
 
     // Floor
-    if (this.y + BR >= PY + PH) {
+    if(this.y + BR >= PY + PH){
       this.y = PY + PH - BR;
-      if (Math.abs(this.vy) < SETTLE_V) {
-        this.vy = 0; this.vx = 0; this.va = 0; this.settled = true;
+      if(Math.abs(this.vy) < SETTLE_V){
+        this.vy=0; this.vx=0; this.va=0; this.settled=true;
       } else {
         this.vy = -Math.abs(this.vy) * BOUNCE_N;
         this.vx *= BOUNCE_T;
-        this.va *= 0.6;
+        this.va *= 0.65;
       }
       return;
     }
 
-    // Block–block collisions
-    for (const o of all) {
-      if (o === this || o.clearing) continue;
-      const dx = this.x - o.x, dy = this.y - o.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      const minD = BR * 2;
-      if (dist < minD && dist > 0.001) {
-        const nx = dx/dist, ny = dy/dist;
-        const ov = minD - dist;
-        if (o.settled || o.blinking) {
-          this.x += nx * ov; this.y += ny * ov;
+    // Block–block
+    for(const o of all){
+      if(o===this || o.clearing) continue;
+      const dx=this.x-o.x, dy=this.y-o.y;
+      const d = Math.sqrt(dx*dx+dy*dy);
+      const minD = BR*2;
+      if(d < minD && d > 0.001){
+        const nx=dx/d, ny=dy/d, ov=minD-d;
+        if(o.settled || o.blinking){
+          this.x += nx*ov; this.y += ny*ov;
           const dot = this.vx*nx + this.vy*ny;
-          if (dot < 0) {
+          if(dot < 0){
             this.vx -= (1+BOUNCE_N)*dot*nx;
             this.vy -= (1+BOUNCE_N)*dot*ny;
             this.vx *= BOUNCE_T;
-            this.va += rand(-0.08, 0.08);
+            this.va += rand(-0.08,0.08);
           }
-          if (ny < -0.55 && Math.abs(this.vy) < SETTLE_V && Math.abs(this.vx) < SETTLE_V) {
-            this.vy = 0; this.vx = 0; this.va = 0; this.settled = true;
+          if(ny < -0.5 && Math.abs(this.vy) < SETTLE_V && Math.abs(this.vx) < SETTLE_V){
+            this.vy=0; this.vx=0; this.va=0; this.settled=true;
           }
         } else {
           this.x += nx*ov*0.5; this.y += ny*ov*0.5;
           o.x    -= nx*ov*0.5; o.y    -= ny*ov*0.5;
-          const rv = (this.vx-o.vx)*nx + (this.vy-o.vy)*ny;
-          if (rv < 0) {
-            const imp = rv * BOUNCE_N;
-            this.vx -= imp*nx; this.vy -= imp*ny;
-            o.vx    += imp*nx; o.vy    += imp*ny;
+          const rv=(this.vx-o.vx)*nx+(this.vy-o.vy)*ny;
+          if(rv < 0){
+            const imp=rv*BOUNCE_N;
+            this.vx-=imp*nx; this.vy-=imp*ny;
+            o.vx   +=imp*nx; o.vy   +=imp*ny;
           }
         }
       }
     }
   }
 
-  draw(ctx) {
+  draw(ctx){
     ctx.save();
     ctx.globalAlpha = this.alpha;
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
 
-    const s = BS * 0.46, r = BS * 0.20;
-    const c = COL[this.color];
-    const flash = this.blinking && Math.floor(this.blinkTimer/5)%2 === 0;
+    const s=BS*0.46, r=BS*0.20;
+    const c=COL[this.color];
+    const flash = this.blinking && Math.floor(this.blinkTimer/5)%2===0;
 
-    ctx.shadowBlur = 12; ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.fillStyle  = flash ? '#ffffff' : c.base;
-    rndRect(ctx, -s,-s, s*2,s*2, r); ctx.fill();
-    ctx.shadowBlur = 0;
+    ctx.shadowBlur=12; ctx.shadowColor='rgba(0,0,0,0.55)';
+    ctx.fillStyle = flash ? '#ffffff' : c.base;
+    rndRect(ctx,-s,-s,s*2,s*2,r); ctx.fill();
+    ctx.shadowBlur=0;
 
-    if (!flash) {
-      // Gloss gradient
-      const g = ctx.createLinearGradient(-s,-s, s*0.4,s*0.4);
-      g.addColorStop(0,   c.lite + 'cc');
+    if(!flash){
+      const g=ctx.createLinearGradient(-s,-s,s*.4,s*.4);
+      g.addColorStop(0,c.lite+'cc');
       g.addColorStop(0.45,'rgba(255,255,255,0)');
-      g.addColorStop(1,   c.dark + '88');
-      ctx.fillStyle = g;
-      rndRect(ctx, -s,-s, s*2,s*2, r); ctx.fill();
-      // Top highlight pill
-      ctx.fillStyle = 'rgba(255,255,255,0.38)';
-      rndRect(ctx, -s*0.65,-s*0.82, s*1.3,s*0.65, r*0.5); ctx.fill();
+      g.addColorStop(1,c.dark+'88');
+      ctx.fillStyle=g;
+      rndRect(ctx,-s,-s,s*2,s*2,r); ctx.fill();
+      ctx.fillStyle='rgba(255,255,255,0.38)';
+      rndRect(ctx,-s*.65,-s*.82,s*1.3,s*.65,r*.5); ctx.fill();
     }
 
     ctx.strokeStyle = flash ? '#aff' : c.dark;
-    ctx.lineWidth   = 1.5;
-    rndRect(ctx, -s,-s, s*2,s*2, r); ctx.stroke();
-
+    ctx.lineWidth=1.5;
+    rndRect(ctx,-s,-s,s*2,s*2,r); ctx.stroke();
     ctx.restore();
   }
 }
 
 // ── Piece ────────────────────────────────────────────────────────
 class Piece {
-  constructor() {
+  constructor(activeColors){
     const fmt = FMTS[Math.floor(Math.random()*FMTS.length)];
-    this.offsets = fmt.map(([dx,dy]) => ({ dx, dy, color: rndCo() }));
+    // Each block in the piece gets a UNIQUE colour
+    const pool = [...activeColors].sort(()=>Math.random()-0.5);
+    this.offsets = fmt.map(([ dx, dy ], i) => ({
+      dx, dy,
+      color: pool[i % pool.length]  // unique cycle; pool.length >= 4 always
+    }));
     this.cx = PX + PW/2;
     this.cy = PY - BS;
   }
 
-  rotate() {
-    this.offsets = this.offsets.map(b => ({ dx:-b.dy, dy:b.dx, color:b.color }));
-    // Wall-kick: push piece back inside play area after rotation
-    const minX = Math.min(...this.offsets.map(b => this.cx+b.dx)) - BR;
-    const maxX = Math.max(...this.offsets.map(b => this.cx+b.dx)) + BR;
-    if (minX < PX)      this.cx += PX - minX;
-    if (maxX > PX+PW)   this.cx -= maxX - (PX+PW);
-  }
-  moveLeft() {
-    const minX = Math.min(...this.offsets.map(b => this.cx+b.dx)) - BR;
-    if (minX - BS*0.5 >= PX) this.cx -= BS;
-  }
-  moveRight() {
-    const maxX = Math.max(...this.offsets.map(b => this.cx+b.dx)) + BR;
-    if (maxX + BS*0.5 <= PX+PW) this.cx += BS;
+  rotate(){
+    this.offsets = this.offsets.map(b=>({ dx:-b.dy, dy:b.dx, color:b.color }));
+    // Wall-kick
+    const minX = Math.min(...this.offsets.map(b=>this.cx+b.dx)) - BR;
+    const maxX = Math.max(...this.offsets.map(b=>this.cx+b.dx)) + BR;
+    if(minX < PX)     this.cx += PX - minX;
+    if(maxX > PX+PW)  this.cx -= maxX - (PX+PW);
   }
 
-  wouldHit(settled) {
-    for (const o of this.offsets) {
-      const bx = this.cx+o.dx, by = this.cy+o.dy;
-      if (by + BR >= PY+PH) return true;
-      for (const s of settled) {
-        const dx = bx-s.x, dy = by-s.y;
-        if (Math.sqrt(dx*dx+dy*dy) < BR*2) return true;
+  moveLeft(){
+    const minX = Math.min(...this.offsets.map(b=>this.cx+b.dx)) - BR;
+    if(minX - BS*.5 >= PX) this.cx -= BS;
+  }
+  moveRight(){
+    const maxX = Math.max(...this.offsets.map(b=>this.cx+b.dx)) + BR;
+    if(maxX + BS*.5 <= PX+PW) this.cx += BS;
+  }
+
+  wouldHit(support){
+    for(const o of this.offsets){
+      const bx=this.cx+o.dx, by=this.cy+o.dy;
+      if(by + BR >= PY+PH) return true;
+      for(const s of support){
+        const dx=bx-s.x, dy=by-s.y;
+        if(Math.sqrt(dx*dx+dy*dy) < BR*2) return true;
       }
     }
     return false;
   }
 
-  draw(ctx) {
-    for (const o of this.offsets) {
-      const b = new Block(this.cx+o.dx, this.cy+o.dy, o.color);
-      b.draw(ctx);
-    }
+  draw(ctx){
+    for(const o of this.offsets) new Block(this.cx+o.dx, this.cy+o.dy, o.color).draw(ctx);
   }
 }
 
 // ── Particle ─────────────────────────────────────────────────────
 class Particle {
-  constructor(x, y, type, opts = {}) {
-    this.x = x; this.y = y; this.type = type;
-    if (type === 'score') {
-      this.text = opts.text;
-      this.vx = 0; this.vy = -1.3;
-      this.life = this.maxLife = 72;
+  constructor(x,y,type,opts={}){
+    this.x=x; this.y=y; this.type=type;
+    if(type==='score'){
+      this.text=opts.text; this.vx=0; this.vy=-1.4;
+      this.life=this.maxLife=75;
     } else {
-      const spd = rand(1.8,4.2), ang = rand(0,Math.PI*2);
-      this.vx = Math.cos(ang)*spd; this.vy = Math.sin(ang)*spd;
-      this.color = opts.color || '#fff';
-      this.life = this.maxLife = rand(24,42);
+      const spd=rand(2,5), ang=rand(0,Math.PI*2);
+      this.vx=Math.cos(ang)*spd; this.vy=Math.sin(ang)*spd;
+      this.color=opts.color||'#fff';
+      this.life=this.maxLife=rand(22,44);
     }
   }
-  update() { this.x+=this.vx; this.y+=this.vy; this.vy+=0.09; this.life--; }
-  draw(ctx) {
-    const t = this.life/this.maxLife;
-    ctx.save(); ctx.globalAlpha = t;
-    if (this.type === 'score') {
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowBlur = 14; ctx.shadowColor = '#00eeff';
-      ctx.font = `bold ${this.text.startsWith('C') ? 17 : 15}px monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(this.text, this.x, this.y);
+  update(){ this.x+=this.vx; this.y+=this.vy; this.vy+=0.09; this.life--; }
+  draw(ctx){
+    const t=this.life/this.maxLife;
+    ctx.save(); ctx.globalAlpha=t;
+    if(this.type==='score'){
+      ctx.fillStyle='#fff'; ctx.shadowBlur=14; ctx.shadowColor='#0ef';
+      ctx.font=`bold ${this.text.startsWith('C')?18:15}px monospace`;
+      ctx.textAlign='center';
+      ctx.fillText(this.text,this.x,this.y);
     } else {
-      ctx.fillStyle = this.color;
-      ctx.shadowBlur = 8; ctx.shadowColor = this.color;
-      const sz = 2.8*t;
+      ctx.fillStyle=this.color; ctx.shadowBlur=8; ctx.shadowColor=this.color;
+      const sz=3*t;
       ctx.beginPath();
-      ctx.moveTo(this.x,        this.y - sz*2.5);
-      ctx.lineTo(this.x + sz*0.7, this.y - sz*0.7);
-      ctx.lineTo(this.x + sz*2.5, this.y);
-      ctx.lineTo(this.x + sz*0.7, this.y + sz*0.7);
-      ctx.lineTo(this.x,        this.y + sz*2.5);
-      ctx.lineTo(this.x - sz*0.7, this.y + sz*0.7);
-      ctx.lineTo(this.x - sz*2.5, this.y);
-      ctx.lineTo(this.x - sz*0.7, this.y - sz*0.7);
+      ctx.moveTo(this.x,this.y-sz*2.5);
+      ctx.lineTo(this.x+sz*.7,this.y-sz*.7); ctx.lineTo(this.x+sz*2.5,this.y);
+      ctx.lineTo(this.x+sz*.7,this.y+sz*.7); ctx.lineTo(this.x,this.y+sz*2.5);
+      ctx.lineTo(this.x-sz*.7,this.y+sz*.7); ctx.lineTo(this.x-sz*2.5,this.y);
+      ctx.lineTo(this.x-sz*.7,this.y-sz*.7);
       ctx.closePath(); ctx.fill();
     }
     ctx.restore();
@@ -290,308 +339,420 @@ class Particle {
 
 // ── Game ─────────────────────────────────────────────────────────
 class Game {
-  constructor() {
-    this.canvas = document.getElementById('game');
-    this.canvas.width  = CW;
-    this.canvas.height = CH;
-    this.ctx = this.canvas.getContext('2d');
-    this.keys = {};
+  constructor(){
+    this.canvas=document.getElementById('game');
+    this.canvas.width=CW; this.canvas.height=CH;
+    this.ctx=this.canvas.getContext('2d');
+    this.keys={};
     this._bindInput();
     this.restart();
   }
 
-  restart() {
-    this.blocks    = [];
-    this.particles = [];
-    this.piece     = null;
-    this.nextPiece = new Piece();
-    this.score     = 0;
-    this.level     = 1;
-    this.gameOver  = false;
-    this.phase     = 'spawn';   // spawn | controlling | physics
-    this.fallSpeed = 1.8;
-    this.cascade   = 0;
-    this.colorTargets = {};
-    COLORS.forEach(c => { this.colorTargets[c] = Math.floor(rand(4,9)); });
+  restart(){
+    this.level=1;
+    this.score=0;
+    this._startLevel();
   }
 
-  _bindInput() {
-    document.addEventListener('keydown', e => {
-      if (this.keys[e.key]) return;
-      this.keys[e.key] = true;
-      if (this.gameOver) { if (e.key==='r'||e.key==='R') this.restart(); return; }
-      if (this.phase !== 'controlling') return;
-      if (e.key==='ArrowLeft')                          this.piece.moveLeft();
-      if (e.key==='ArrowRight')                         this.piece.moveRight();
-      if (e.key==='ArrowUp'||e.key==='z'||e.key==='Z') this.piece.rotate();
-      if (e.key===' ')                                  this._hardDrop();
-    });
-    document.addEventListener('keyup', e => { delete this.keys[e.key]; });
+  _startLevel(){
+    this.blocks=[];
+    this.particles=[];
+    this.piece=null;
+    this.activeColors=getActiveColors(this.level);
+    this.nextPiece=new Piece(this.activeColors);
+    this.colorTargets=makeLevelTargets(this.level, this.activeColors);
+    this.cascade=0;
+    this.phase='spawn';        // spawn|controlling|physics|levelcomplete|gameover
+    this.fallSpeed=1.6 + this.level*0.06;
+    this.levelCompleteTimer=0;
+    this.newColorUnlocked = (this.level > 1 && (this.level-1)%10===0)
+      ? this.activeColors[this.activeColors.length-1]
+      : null;
   }
 
-  _settled()  { return this.blocks.filter(b => b.settled || b.blinking); }
+  _nextLevel(){
+    this.level++;
+    this._startLevel();
+  }
 
-  _hardDrop() {
-    while (!this.piece.wouldHit(this._settled())) this.piece.cy += 2;
+  // Settled + blinking blocks act as "solid ground" for collision
+  _support(){ return this.blocks.filter(b=>b.settled||b.blinking); }
+
+  _release(){
+    for(const o of this.piece.offsets){
+      const b=new Block(this.piece.cx+o.dx, this.piece.cy+o.dy, o.color);
+      b.vy=rand(3.5,5.5); b.vx=rand(-2,2); b.va=rand(-0.13,0.13);
+      this.blocks.push(b);
+    }
+    this.piece=null;
+    this.phase='physics';
+  }
+
+  _hardDrop(){
+    while(!this.piece.wouldHit(this._support())) this.piece.cy+=2;
+    this.piece.cy-=2;
     this._release();
   }
 
-  _release() {
-    for (const o of this.piece.offsets) {
-      const b = new Block(this.piece.cx+o.dx, this.piece.cy+o.dy, o.color);
-      b.vy = rand(3.5, 5.5);
-      b.vx = rand(-1.8, 1.8);
-      b.va = rand(-0.13, 0.13);
-      this.blocks.push(b);
-    }
-    this.piece = null;
-    this.phase = 'physics';
-  }
+  // ── Floating block check ────────────────────────────────────────
+  // After blocks clear, unsettle any block with no path to the floor
+  _checkFloating(){
+    const candidates = this.blocks.filter(b=>b.settled && !b.blinking);
+    if(!candidates.length) return;
 
-  _sparkles(x, y, color) {
-    const cols = ['#fff','#ff0','#0ff','#f0f', COL[color]?.lite||'#fff'];
-    for (let i=0; i<8; i++)
-      this.particles.push(new Particle(x, y, 'sparkle', { color: cols[i%cols.length] }));
-  }
+    const grounded=new Set();
+    // Seed: blocks touching the floor
+    for(const b of candidates)
+      if(b.y + BR >= PY+PH - 6) grounded.add(b);
 
-  _findMatches() {
-    const cands = this.blocks.filter(b => b.settled && !b.blinking && !b.clearing);
-    if (!cands.length) return false;
-    const visited = new Set();
-    let found = false;
-
-    for (const b of cands) {
-      if (visited.has(b)) continue;
-      const group = [], q = [b];
-      visited.add(b);
-      while (q.length) {
-        const cur = q.shift();
-        group.push(cur);
-        for (const o of cands) {
-          if (visited.has(o) || o.color !== cur.color) continue;
-          const dx=cur.x-o.x, dy=cur.y-o.y;
-          if (Math.sqrt(dx*dx+dy*dy) < ADJ_DIST) { visited.add(o); q.push(o); }
+    // BFS: propagate groundedness upward through touching blocks
+    let changed=true;
+    while(changed){
+      changed=false;
+      for(const b of candidates){
+        if(grounded.has(b)) continue;
+        for(const g of grounded){
+          const dx=b.x-g.x, dy=b.y-g.y;
+          if(Math.sqrt(dx*dx+dy*dy) < BR*2.5){ grounded.add(b); changed=true; break; }
         }
       }
-      if (group.length >= 3) {
-        found = true;
-        group.forEach(bl => {
-          bl.blinking   = true;
-          bl.blinkTimer = BLINK_DUR;
-          bl.settled    = false;
+    }
+
+    // Unsettle any block not reachable from floor
+    for(const b of candidates){
+      if(!grounded.has(b)){
+        b.settled=false;
+        b.vy=rand(0.3,1); b.vx=rand(-0.4,0.4);
+      }
+    }
+  }
+
+  // ── Match detection ─────────────────────────────────────────────
+  // Runs every frame during physics: any touch counts, not just settled
+  _findMatches(){
+    // Candidates: all blocks that aren't already blinking/clearing
+    const cands=this.blocks.filter(b=>!b.blinking && !b.clearing);
+    if(cands.length < 3) return false;
+
+    const visited=new Set();
+    let found=false;
+
+    for(const b of cands){
+      if(visited.has(b)) continue;
+      const group=[], q=[b];
+      visited.add(b);
+      while(q.length){
+        const cur=q.shift();
+        group.push(cur);
+        for(const o of cands){
+          if(visited.has(o)||o.color!==cur.color) continue;
+          const dx=cur.x-o.x, dy=cur.y-o.y;
+          if(Math.sqrt(dx*dx+dy*dy) < ADJ_DIST){ visited.add(o); q.push(o); }
+        }
+      }
+      if(group.length >= 3){
+        found=true;
+        const mult=Math.max(1,this.cascade);
+        const pts=group.length*10*mult;
+        this.score+=pts;
+        this.colorTargets[group[0].color]=
+          Math.max(0,(this.colorTargets[group[0].color]||0)-group.length);
+
+        const cx=group.reduce((s,bl)=>s+bl.x,0)/group.length;
+        const cy=group.reduce((s,bl)=>s+bl.y,0)/group.length;
+        const label=this.cascade>0 ? `CASCADE! +${pts}` : `+${pts}`;
+        this.particles.push(new Particle(cx,cy-20,'score',{text:label}));
+        this._sparkles(cx,cy,group[0].color);
+
+        // Snap matched blocks in place and start blinking
+        group.forEach(bl=>{
+          bl.vx=0; bl.vy=0; bl.va=0;
+          bl.settled=true;
+          bl.blinking=true; bl.blinkTimer=BLINK_DUR;
         });
-        const mult = Math.max(1, this.cascade);
-        const pts  = group.length * 10 * mult;
-        this.score += pts;
-        this.colorTargets[group[0].color] =
-          Math.max(0, (this.colorTargets[group[0].color]||0) - group.length);
-        const cx = group.reduce((s,bl)=>s+bl.x,0)/group.length;
-        const cy = group.reduce((s,bl)=>s+bl.y,0)/group.length;
-        const label = this.cascade > 0 ? `CASCADE! +${pts}` : `+${pts}`;
-        this.particles.push(new Particle(cx, cy-18, 'score', { text: label }));
-        if (this.cascade > 0) this._sparkles(cx, cy, group[0].color);
       }
     }
     return found;
   }
 
-  // ── Update ──────────────────────────────────────────────────────
-  update() {
-    if (this.gameOver) return;
+  _sparkles(x,y,color){
+    const cols=['#fff','#ff0','#0ff','#f0f',COL[color]?.lite||'#fff'];
+    for(let i=0;i<8;i++)
+      this.particles.push(new Particle(x,y,'sparkle',{color:cols[i%cols.length]}));
+  }
 
-    this.particles = this.particles.filter(p => { p.update(); return p.life > 0; });
+  _checkLevelComplete(){
+    const done=Object.values(this.colorTargets).every(v=>v<=0);
+    if(done){
+      this.phase='levelcomplete';
+      this.levelCompleteTimer=150;
+    }
+  }
 
-    if (this.phase === 'spawn') {
-      this.piece     = this.nextPiece;
-      this.piece.cx  = PX + PW/2;
-      this.piece.cy  = PY - BS;
-      this.nextPiece = new Piece();
-      this.phase     = 'controlling';
-      if (this.piece.wouldHit(this._settled())) { this.gameOver = true; return; }
+  // ── Update ───────────────────────────────────────────────────────
+  update(){
+    if(this.phase==='gameover') return;
 
-    } else if (this.phase === 'controlling') {
-      const spd = this.keys['ArrowDown'] ? 7 : this.fallSpeed;
-      this.piece.cy += spd;
-      if (this.piece.wouldHit(this._settled())) {
-        this.piece.cy -= spd;
+    this.particles=this.particles.filter(p=>{ p.update(); return p.life>0; });
+
+    if(this.phase==='levelcomplete'){
+      if(--this.levelCompleteTimer<=0) this._nextLevel();
+      return;
+    }
+
+    if(this.phase==='spawn'){
+      this.piece=this.nextPiece;
+      this.piece.cx=PX+PW/2; this.piece.cy=PY-BS;
+      this.nextPiece=new Piece(this.activeColors);
+      this.phase='controlling';
+      if(this.piece.wouldHit(this._support())){
+        this.phase='gameover'; return;
+      }
+
+    } else if(this.phase==='controlling'){
+      const spd=this.keys['ArrowDown'] ? 8 : this.fallSpeed;
+      this.piece.cy+=spd;
+      if(this.piece.wouldHit(this._support())){
+        this.piece.cy-=spd;
         this._release();
       }
 
-    } else if (this.phase === 'physics') {
-      const all = this.blocks.filter(b => !b.clearing);
+    } else if(this.phase==='physics'){
+      const all=this.blocks.filter(b=>!b.clearing);
 
-      // Physics step
-      for (const b of this.blocks)
-        if (!b.settled && !b.blinking && !b.clearing) b.physics(all);
+      // Physics step all active blocks
+      for(const b of this.blocks)
+        if(!b.settled && !b.blinking && !b.clearing) b.physics(all);
+
+      // Match on ANY touch – check every frame
+      if(this._findMatches()) this.cascade++;
 
       // Blink countdown
-      for (const b of this.blocks) {
-        if (!b.blinking) continue;
-        if (--b.blinkTimer <= 0) {
-          b.blinking = false; b.clearing = true; b.clearTimer = CLEAR_DUR;
-          this._sparkles(b.x, b.y, b.color);
+      for(const b of this.blocks){
+        if(!b.blinking) continue;
+        if(--b.blinkTimer<=0){
+          b.blinking=false; b.clearing=true; b.clearTimer=CLEAR_DUR;
         }
       }
 
       // Clear fade
-      for (const b of this.blocks) {
-        if (!b.clearing) continue;
-        b.alpha = --b.clearTimer / CLEAR_DUR;
+      for(const b of this.blocks){
+        if(!b.clearing) continue;
+        b.alpha=--b.clearTimer/CLEAR_DUR;
       }
-      this.blocks = this.blocks.filter(b => !(b.clearing && b.clearTimer <= 0));
 
-      // Check if all at rest
-      const active   = this.blocks.filter(b => !b.settled && !b.blinking && !b.clearing);
-      const blinking = this.blocks.filter(b => b.blinking);
-      const clearing = this.blocks.filter(b => b.clearing);
+      // Remove cleared blocks, then check for floating
+      const before=this.blocks.length;
+      this.blocks=this.blocks.filter(b=>!(b.clearing&&b.clearTimer<=0));
+      if(this.blocks.length < before){
+        this._checkFloating();
+        this._checkLevelComplete();
+      }
 
-      if (!active.length && !blinking.length && !clearing.length) {
-        if (this._findMatches()) {
-          this.cascade++;
-        } else {
-          this.cascade = 0;
-          this.phase   = 'spawn';
-        }
+      // All at rest with no pending blinks/clears → spawn next piece
+      const active  =this.blocks.filter(b=>!b.settled&&!b.blinking&&!b.clearing);
+      const blinking=this.blocks.filter(b=>b.blinking);
+      const clearing=this.blocks.filter(b=>b.clearing);
+      if(!active.length && !blinking.length && !clearing.length){
+        this.cascade=0;
+        if(this.phase!=='levelcomplete') this.phase='spawn';
       }
     }
   }
 
-  // ── Draw ────────────────────────────────────────────────────────
-  _drawBg() {
-    const ctx = this.ctx;
-    ctx.fillStyle = '#070d20';
-    ctx.fillRect(0,0,CW,CH);
-
-    // Side panel strips
-    ctx.fillStyle = '#0b1530';
-    ctx.fillRect(0,0,PX,CH);
+  // ── Draw ─────────────────────────────────────────────────────────
+  _drawBg(){
+    const ctx=this.ctx;
+    ctx.fillStyle='#070d20'; ctx.fillRect(0,0,CW,CH);
+    ctx.fillStyle='#0b1530'; ctx.fillRect(0,0,PX,CH);
     ctx.fillRect(PX+PW,0,PX,CH);
-
-    // Play area
-    ctx.fillStyle = '#050c1c';
-    ctx.fillRect(PX,PY,PW,PH);
+    ctx.fillStyle='#050c1c'; ctx.fillRect(PX,PY,PW,PH);
 
     // Grid
-    ctx.strokeStyle = 'rgba(50,110,200,0.07)';
-    ctx.lineWidth = 1;
-    for (let x=PX; x<=PX+PW; x+=BS) {
+    ctx.strokeStyle='rgba(50,110,200,0.07)'; ctx.lineWidth=1;
+    for(let x=PX;x<=PX+PW;x+=BS){
       ctx.beginPath(); ctx.moveTo(x,PY); ctx.lineTo(x,PY+PH); ctx.stroke();
     }
-    for (let y=PY; y<=PY+PH; y+=BS) {
+    for(let y=PY;y<=PY+PH;y+=BS){
       ctx.beginPath(); ctx.moveTo(PX,y); ctx.lineTo(PX+PW,y); ctx.stroke();
     }
 
-    // Play area border
-    ctx.strokeStyle = '#1e4a7a'; ctx.lineWidth = 2;
+    ctx.strokeStyle='#1e4a7a'; ctx.lineWidth=2;
     ctx.strokeRect(PX,PY,PW,PH);
 
-    // Decorative side slots
-    for (let i=0; i<6; i++) {
-      const sy = PY + 20 + i*62;
-      for (const sx of [5, PX+PW+13]) {
-        ctx.fillStyle   = '#0c1e3c';
-        rndRect(ctx, sx, sy, 22, 42, 6); ctx.fill();
-        ctx.strokeStyle = '#1a3a60'; ctx.lineWidth=1;
-        rndRect(ctx, sx, sy, 22, 42, 6); ctx.stroke();
-        // LED dot
-        ctx.fillStyle = i % 2 === 0 ? '#1a6a40' : '#1a3a6a';
-        ctx.beginPath(); ctx.arc(sx+11, sy+6, 3, 0, Math.PI*2); ctx.fill();
+    // Side slots
+    for(let i=0;i<7;i++){
+      const sy=PY+14+i*72;
+      for(const sx of [5,PX+PW+13]){
+        ctx.fillStyle='#0c1e3c';
+        rndRect(ctx,sx,sy,22,46,6); ctx.fill();
+        ctx.strokeStyle='#1a3a60'; ctx.lineWidth=1;
+        rndRect(ctx,sx,sy,22,46,6); ctx.stroke();
+        ctx.fillStyle= i%2===0 ? '#1a6a40' : '#1a3a6a';
+        ctx.beginPath(); ctx.arc(sx+11,sy+7,3.5,0,Math.PI*2); ctx.fill();
       }
     }
   }
 
-  _drawHUD() {
-    const ctx = this.ctx;
-    // Top bar background
-    ctx.fillStyle = '#08122a';
-    ctx.fillRect(0,0,CW,PY-2);
+  _drawHUD(){
+    const ctx=this.ctx;
+    ctx.fillStyle='#08122a'; ctx.fillRect(0,0,CW,PY-2);
 
     // Score box
-    ctx.fillStyle = '#0c1c3c';
-    rndRect(ctx, CW/2-52,8, 104,38, 7); ctx.fill();
-    ctx.strokeStyle = '#2a6aaa'; ctx.lineWidth = 1.5;
-    rndRect(ctx, CW/2-52,8, 104,38, 7); ctx.stroke();
-    ctx.fillStyle = '#88ddff';
-    ctx.font = 'bold 18px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(String(this.score).padStart(5,'0'), CW/2, 34);
+    ctx.fillStyle='#0c1c3c';
+    rndRect(ctx,CW/2-56,8,112,40,7); ctx.fill();
+    ctx.strokeStyle='#2a6aaa'; ctx.lineWidth=1.5;
+    rndRect(ctx,CW/2-56,8,112,40,7); ctx.stroke();
+    ctx.fillStyle='#88ddff'; ctx.font='bold 20px monospace'; ctx.textAlign='center';
+    ctx.fillText(String(this.score).padStart(6,'0'),CW/2,36);
 
-    ctx.font = 'bold 11px monospace';
-    ctx.textAlign = 'left';  ctx.fillStyle = '#88ffaa'; ctx.fillText(`LEVEL ${this.level}`, PX+2, 26);
-    ctx.textAlign = 'right'; ctx.fillStyle = '#88ffaa'; ctx.fillText('MODE E', PX+PW-2, 26);
+    ctx.font='bold 11px monospace';
+    ctx.textAlign='left';  ctx.fillStyle='#88ffaa';
+    ctx.fillText(`LEVEL ${this.level}`,PX+2,28);
+    ctx.textAlign='right'; ctx.fillStyle='#88ffaa';
+    ctx.fillText('MODE E',PX+PW-2,28);
 
-    // Bottom HUD background
-    const by = PY+PH;
-    ctx.fillStyle = '#08122a';
-    ctx.fillRect(0, by, CW, CH-by);
-
-    // Separator line
-    ctx.strokeStyle = '#1e4a7a'; ctx.lineWidth = 2;
+    // ── Bottom HUD ─────────────────────────────────────────────
+    const by=PY+PH;
+    ctx.fillStyle='#08122a'; ctx.fillRect(0,by,CW,CH-by);
+    ctx.strokeStyle='#1e4a7a'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(0,by); ctx.lineTo(CW,by); ctx.stroke();
 
-    // Colour target counters
-    const spacing = PW/4;
-    COLORS.forEach((c,i) => {
-      const x = PX + spacing*i + spacing/2;
-      const y = by + 34;
-      ctx.shadowBlur = 6; ctx.shadowColor = COL[c].base;
-      ctx.fillStyle  = COL[c].base;
-      ctx.fillRect(x-30, y-13, 14, 14);
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = COL[c].dark; ctx.lineWidth = 1;
-      ctx.strokeRect(x-30, y-13, 14, 14);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
-      ctx.fillText(this.colorTargets[c], x-12, y);
-    });
-
-    // Next piece preview box
-    const npx = CW/2-36, npy = by+12;
-    ctx.fillStyle = '#0d1e40';
-    rndRect(ctx, npx, npy, 72, 58, 8); ctx.fill();
-    ctx.strokeStyle = '#3a7aaa'; ctx.lineWidth = 2;
-    rndRect(ctx, npx, npy, 72, 58, 8); ctx.stroke();
-
-    if (this.nextPiece) {
-      ctx.save();
-      ctx.translate(CW/2, npy+29);
-      ctx.scale(0.48, 0.48);
-      for (const o of this.nextPiece.offsets) new Block(o.dx, o.dy, o.color).draw(ctx);
+    // Next piece box (left side)
+    const npx=PX, npy=by+12;
+    ctx.fillStyle='#0d1e40';
+    rndRect(ctx,npx,npy,80,68,8); ctx.fill();
+    ctx.strokeStyle='#3a7aaa'; ctx.lineWidth=2;
+    rndRect(ctx,npx,npy,80,68,8); ctx.stroke();
+    ctx.fillStyle='#4488aa'; ctx.font='9px monospace'; ctx.textAlign='center';
+    ctx.fillText('NEXT',npx+40,npy+11);
+    if(this.nextPiece){
+      ctx.save(); ctx.translate(npx+40,npy+42); ctx.scale(0.42,0.42);
+      for(const o of this.nextPiece.offsets) new Block(o.dx,o.dy,o.color).draw(ctx);
       ctx.restore();
     }
 
-    // Controls strip
-    ctx.fillStyle = '#2a4a7a';
-    ctx.font = '9px monospace'; ctx.textAlign = 'center';
-    ctx.fillText('← → MOVE   ↑/Z ROTATE   ↓ FAST   SPACE DROP   R RESTART', CW/2, CH-8);
+    // Colour target counters (right side, grid 4 per row)
+    const activeTargets=this.activeColors.filter(c=>(this.colorTargets[c]||0)>0);
+    const allActive=this.activeColors;
+    const COLS_PER_ROW=4;
+    const cellW=Math.floor((CW-PX-80-20)/COLS_PER_ROW); // right of next piece box
+    const startX=PX+80+14;
+
+    allActive.forEach((c,i)=>{
+      const row=Math.floor(i/COLS_PER_ROW);
+      const col=i%COLS_PER_ROW;
+      const cx2=startX+col*cellW+cellW/2;
+      const cy2=by+28+row*38;
+      const cnt=this.colorTargets[c]||0;
+      const done=cnt<=0;
+
+      // Colour dot
+      ctx.shadowBlur= done?0:6; ctx.shadowColor=COL[c].base;
+      ctx.fillStyle= done ? '#1a2a3a' : COL[c].base;
+      ctx.beginPath(); ctx.arc(cx2-16,cy2,7,0,Math.PI*2); ctx.fill();
+      ctx.shadowBlur=0;
+      if(!done){
+        ctx.strokeStyle=COL[c].dark; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.arc(cx2-16,cy2,7,0,Math.PI*2); ctx.stroke();
+      }
+      // Count
+      ctx.fillStyle= done ? '#2a4a5a' : '#ffffff';
+      ctx.font=`bold 13px monospace`; ctx.textAlign='left';
+      ctx.fillText(done?'✓':cnt, cx2-5, cy2+5);
+    });
+
+    // Controls
+    ctx.fillStyle='#2a4a7a'; ctx.font='9px monospace'; ctx.textAlign='center';
+    ctx.fillText('← → MOVE  ↑/Z ROT  ↓ FAST  SPC DROP  R RESTART',CW/2,CH-6);
   }
 
-  draw() {
-    this._drawBg();
-    for (const b of this.blocks)    b.draw(this.ctx);
-    if (this.piece)                 this.piece.draw(this.ctx);
-    for (const p of this.particles) p.draw(this.ctx);
-    this._drawHUD();
+  _drawOverlay(){
+    const ctx=this.ctx;
+    if(this.phase==='levelcomplete'){
+      const t=this.levelCompleteTimer;
+      ctx.fillStyle=`rgba(0,0,0,${Math.min(0.65,(150-t)/80)})`;
+      ctx.fillRect(0,0,CW,CH);
+      ctx.save();
+      const scale=1+(Math.sin((150-t)*0.15)*0.04);
+      ctx.translate(CW/2,CH/2);ctx.scale(scale,scale);
+      ctx.shadowBlur=30; ctx.shadowColor='#0f0';
+      ctx.fillStyle='#44ff88'; ctx.font='bold 32px monospace'; ctx.textAlign='center';
+      ctx.fillText('LEVEL CLEAR!',0,-20);
+      ctx.shadowBlur=0;
+      ctx.fillStyle='#88ccff'; ctx.font='14px monospace';
+      ctx.fillText(`Score: ${this.score}`,0,18);
+      if(this.newColorUnlocked){
+        ctx.fillStyle=COL[this.newColorUnlocked].base;
+        ctx.shadowBlur=16; ctx.shadowColor=COL[this.newColorUnlocked].base;
+        ctx.fillText(`NEW COLOR UNLOCKED: ${this.newColorUnlocked.toUpperCase()}!`,0,50);
+        ctx.shadowBlur=0;
+      }
+      ctx.restore();
+    }
 
-    if (this.gameOver) {
-      this.ctx.fillStyle = 'rgba(0,0,0,0.78)';
-      this.ctx.fillRect(0,0,CW,CH);
-      this.ctx.shadowBlur = 24; this.ctx.shadowColor = '#ff2020';
-      this.ctx.fillStyle = '#ff4444';
-      this.ctx.font = 'bold 30px monospace'; this.ctx.textAlign = 'center';
-      this.ctx.fillText('GAME OVER', CW/2, CH/2-20);
-      this.ctx.shadowBlur = 0;
-      this.ctx.fillStyle = '#88ccff'; this.ctx.font = '15px monospace';
-      this.ctx.fillText(`Score: ${this.score}`, CW/2, CH/2+18);
-      this.ctx.fillStyle = '#5588bb';
-      this.ctx.fillText('Press R to restart', CW/2, CH/2+48);
+    if(this.phase==='gameover'){
+      ctx.fillStyle='rgba(0,0,0,0.80)'; ctx.fillRect(0,0,CW,CH);
+      ctx.shadowBlur=24; ctx.shadowColor='#f00';
+      ctx.fillStyle='#ff4444'; ctx.font='bold 32px monospace'; ctx.textAlign='center';
+      ctx.fillText('GAME OVER',CW/2,CH/2-20);
+      ctx.shadowBlur=0;
+      ctx.fillStyle='#88ccff'; ctx.font='15px monospace';
+      ctx.fillText(`Score: ${this.score}  Level: ${this.level}`,CW/2,CH/2+18);
+      ctx.fillStyle='#5588bb';
+      ctx.fillText('Press R to restart',CW/2,CH/2+50);
     }
   }
 
-  loop() {
+  draw(){
+    this._drawBg();
+    for(const b of this.blocks)    b.draw(this.ctx);
+    if(this.piece)                 this.piece.draw(this.ctx);
+    for(const p of this.particles) p.draw(this.ctx);
+    this._drawHUD();
+    this._drawOverlay();
+  }
+
+  // ── Input ────────────────────────────────────────────────────────
+  _bindInput(){
+    document.addEventListener('keydown',e=>{
+      if(this.keys[e.key]) return;
+      this.keys[e.key]=true;
+      if(e.key==='r'||e.key==='R'){ this.restart(); return; }
+      if(this.phase!=='controlling') return;
+      if(e.key==='ArrowLeft')                          this.piece.moveLeft();
+      if(e.key==='ArrowRight')                         this.piece.moveRight();
+      if(e.key==='ArrowUp'||e.key==='z'||e.key==='Z') this.piece.rotate();
+      if(e.key===' ')                                  this._hardDrop();
+    });
+    document.addEventListener('keyup',e=>{ delete this.keys[e.key]; });
+
+    // Touch controls (mobile)
+    let touchStartX=0, touchStartY=0;
+    this.canvas.addEventListener('touchstart',e=>{
+      touchStartX=e.touches[0].clientX;
+      touchStartY=e.touches[0].clientY;
+      e.preventDefault();
+    },{passive:false});
+    this.canvas.addEventListener('touchend',e=>{
+      const dx=e.changedTouches[0].clientX-touchStartX;
+      const dy=e.changedTouches[0].clientY-touchStartY;
+      if(this.phase!=='controlling') return;
+      if(Math.abs(dx)>Math.abs(dy)){
+        if(dx < -20)      this.piece.moveLeft();
+        else if(dx > 20)  this.piece.moveRight();
+      } else {
+        if(dy < -20)      this.piece.rotate();
+        else if(dy > 30)  this._hardDrop();
+      }
+      e.preventDefault();
+    },{passive:false});
+  }
+
+  loop(){
     this.update();
     this.draw();
-    requestAnimationFrame(() => this.loop());
+    requestAnimationFrame(()=>this.loop());
   }
 }
 

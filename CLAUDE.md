@@ -104,18 +104,26 @@ Phase 4 leftovers: granular roles (Owner/Manager/Project-only), smaller schema c
 
 Future phases per the agreed roadmap: Phase 5 (more pentester UI), Phase 6 (deeper report editor — see "Report engine" below), Phase 7 (more client portal), Phase 8 = Settings + admin UI, Phase 9 = third-party integrations.
 
-### Report engine — Cyver token language port (planned)
+### Cyver port — design docs and slice plan
 
-The user wants to mirror Cyver's report templating system. Local PDF docs (18 articles) are at `Pentest-platform/docs/source/Documentation/`. Full design synthesis is in **`~/.claude/projects/-home-developer-Code/memory/project_report_engine_design.md`** — load it before any report-template slice.
+The user is reproducing Cyver's pentester-side surface area. Source documentation:
+- 18 PDFs at `Pentest-platform/docs/source/Documentation/` (the original report-engine docs)
+- 180 PDFs at `Pentest-platform/docs/source/Cyver_doc/parts/` (full export of the support site, line-aligned with `urls.txt`)
 
-Quick orientation:
-- **Two token flavours:** bare `{Project_Name}` and parameterised `{Finding_Details?group.1.fields=description,impact&setting.layout=headings}`. Parameter syntax: `?` separates name from query, `&` separates pairs, `.` for sub-keys, `,` for value lists.
-- **Three-level architecture:** Tenant `ReportTemplate` (with ordered sections) → project-scoped `Report` → `ReportVersion` (each independently publishable).
-- **Token output is wrapped in well-known CSS classes** so users style via custom CSS — `{Token_Name}` → `.token_name`, etc.
-- **Status enum mismatch is the biggest design decision pending.** Cyver: `Draft, ToReview, Reviewed, PendingFix, ReadyRetest, Accepted, Mitigated, PartialFix, FalsePositive, Raised, ReOpen`. Ours: `draft, in_review, approved, published, retest_pending, retest_passed, retest_failed, closed`. Decide before implementing the parameterised filter on `{Finding_Details}`.
-- **Recommended slice order:** A (token engine v1 + 10 bare tokens), B (template editor + section schema), C (full `{Finding_Details}`), D (AttackChain models), E (Text Blocks), F (per-report section management), G (External PDF + Word export), H (comments + version diff).
+Two memory files drive every Cyver-port slice:
+- **`~/.claude/projects/-home-developer-Code/memory/project_cyver_full_features.md`** — full feature inventory derived from the 180-article export, prioritised pentester-first. Lists what we have, what we don't, and where in the catalog each feature lives.
+- **`~/.claude/projects/-home-developer-Code/memory/project_report_engine_design.md`** — token language deep-dive plus the canonical slice plan in §8.
 
-**Today's report viewer is hardcoded layout, not section-iterating.** Slice A migrates it to render through the new token pipeline against a hardcoded default template. Slice B adds the user-editable template store.
+**Load both files before starting any pentester / finding / library / checklist / report-related slice.** The slice plan is opinionated about ordering — data-model foundations come before the report editor because the parameterised `{Finding_Details}` token can't render fields that don't exist as schema yet.
+
+Top-of-mind orientation:
+- **Status is data, not an enum.** Cyver makes Finding Statuses tenant-configurable. Slice B in the plan replaces our hardcoded `VALID_TRANSITIONS` map with a `FindingStatus` table.
+- **Custom Finding Fields are central.** Tenant Finding Fields Templates with categories + typed fields (Text/Multitext/Dropdown/Multiselect, max 5 each, code-based). Slice C in the plan.
+- **Two token flavours:** bare `{Project_Name}` and parameterised `{Finding_Details?group.1.fields=description,impact&setting.layout=headings}`. `?` separates name from query, `&` separates pairs, `.` is part of key, `,` for value lists.
+- **Token output is wrapped in well-known CSS classes** so users style via custom CSS — `{Token_Name}` → `.token_name`.
+- **Customer portal expansion + 3rd-party integrations + SSO/billing are explicitly deferred to the last slices** — focus is the pentester side first.
+
+**Today's report viewer is hardcoded layout, not section-iterating** — Slice 3 (commit `a5b8ecf`) migrated it through the token pipeline against a hardcoded default template (`apps/api/src/modules/reports/tokens/default-template.ts`). Slice J in the new plan adds the user-editable template store.
 
 ### Conventions established by past slices
 

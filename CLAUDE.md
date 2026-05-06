@@ -91,22 +91,31 @@ The API container's CMD runs `prisma db push --accept-data-loss --skip-generate 
 
 **Default request body limit was raised to 20 MB** in `apps/api/src/main.ts` so scanner imports fit. Multer uploads cap at 50 MB per file independently.
 
-### Phase 4 progress (current)
-Phase 4 = "Backend foundation". 9 slices shipped:
+### Slice progress (current)
 
-1. **Slice 1** — Assets (client library + per-pentest scoping)
-2. **Slice 2** — Finding codes (`F-YYYY-NNNN`) + assignees + labels
-3. **Slice 3** — Checklist runs (Methodology tab)
-4. **Slice 4** — Project messages w/ public-vs-internal split
-5. **Slice 5** — Project files w/ visibleToClient
-6. **Slice 6** — Worklog (per-user time tracking)
-7. **Slice 7** — Scanner imports (nuclei JSON + CSV with dedup + asset linking)
-8. **Slice 8** — Insights dashboard
-9. **Slice 9** — Webhook delivery (real HTTP + HMAC + retry)
+The full per-slice changelog with commit hashes lives in the **project memory** at `~/.claude/projects/-home-developer-Code/memory/project_pentest_platform.md` — load it before starting work. Summary:
 
-Phase 4 still has: granular roles (Owner/Manager/Project-only) and smaller schema chunks (PentestTemplate, ComplianceNorm, RequestForm, FindingField, ReportTemplate sections, CveMapping/CweMapping).
+- **Phase 4 (backend foundation):** 9 slices shipped — Assets, Finding codes/assignees/labels, Checklist runs, Messages (public/internal), Files (visibleToClient), Worklog, Scanner imports (nuclei + CSV), Insights dashboard, Webhook delivery.
+- **Phase 5 (pentester UI):** 1 slice — cross-project Findings page with filters.
+- **Phase 6 (reports):** 2 slices — Generated reports + browser-print PDF, Approve/Publish controls. Token-based template engine port from Cyver is **designed but not yet implemented** (see below).
+- **Phase 7 (client portal):** 2 slices — Polished portal finding detail + remediation, Portal reports list + viewer.
 
-Future phases per the agreed roadmap: Phase 5 = Pentester UI buildout, Phase 6 = Report editor + generator, Phase 7 = Client portal expansion, Phase 8 = Settings + admin UI, Phase 9 = third-party integrations.
+Phase 4 leftovers: granular roles (Owner/Manager/Project-only), smaller schema chunks (PentestTemplate, ComplianceNorm, RequestForm, FindingField).
+
+Future phases per the agreed roadmap: Phase 5 (more pentester UI), Phase 6 (deeper report editor — see "Report engine" below), Phase 7 (more client portal), Phase 8 = Settings + admin UI, Phase 9 = third-party integrations.
+
+### Report engine — Cyver token language port (planned)
+
+The user wants to mirror Cyver's report templating system. Local PDF docs (18 articles) are at `Pentest-platform/docs/source/Documentation/`. Full design synthesis is in **`~/.claude/projects/-home-developer-Code/memory/project_report_engine_design.md`** — load it before any report-template slice.
+
+Quick orientation:
+- **Two token flavours:** bare `{Project_Name}` and parameterised `{Finding_Details?group.1.fields=description,impact&setting.layout=headings}`. Parameter syntax: `?` separates name from query, `&` separates pairs, `.` for sub-keys, `,` for value lists.
+- **Three-level architecture:** Tenant `ReportTemplate` (with ordered sections) → project-scoped `Report` → `ReportVersion` (each independently publishable).
+- **Token output is wrapped in well-known CSS classes** so users style via custom CSS — `{Token_Name}` → `.token_name`, etc.
+- **Status enum mismatch is the biggest design decision pending.** Cyver: `Draft, ToReview, Reviewed, PendingFix, ReadyRetest, Accepted, Mitigated, PartialFix, FalsePositive, Raised, ReOpen`. Ours: `draft, in_review, approved, published, retest_pending, retest_passed, retest_failed, closed`. Decide before implementing the parameterised filter on `{Finding_Details}`.
+- **Recommended slice order:** A (token engine v1 + 10 bare tokens), B (template editor + section schema), C (full `{Finding_Details}`), D (AttackChain models), E (Text Blocks), F (per-report section management), G (External PDF + Word export), H (comments + version diff).
+
+**Today's report viewer is hardcoded layout, not section-iterating.** Slice A migrates it to render through the new token pipeline against a hardcoded default template. Slice B adds the user-editable template store.
 
 ### Conventions established by past slices
 
